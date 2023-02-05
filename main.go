@@ -10,19 +10,26 @@ import (
 	"time"
 
 	"github.com/akyoto/cache"
+	"github.com/jedib0t/go-pretty/v6/table"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
 )
 
 var (
-	srv         *sheets.Service
-	zaCache     *cache.Cache
-	lastUpdated time.Time
-
 	//go:embed var
 	res embed.FS
+
+	srv     *sheets.Service
+	zaCache *cache.Cache
+	//lastUpdated time.Time
 )
+
+// type row []string
+// type table struct {
+// 	Header row
+// 	Rows   []row
+// }
 
 func getData() (string, error) {
 	// Prints the names and majors of students in a sample spreadsheet:
@@ -33,7 +40,7 @@ func getData() (string, error) {
 
 	// https://docs.google.com/spreadsheets/d/1hht9Vne2h3icOGX0hGscNklclJEZY7gYY-18n3KnGJo/edit#gid=0
 	spreadsheetId := "1hht9Vne2h3icOGX0hGscNklclJEZY7gYY-18n3KnGJo"
-	readRange := "status!A1:E"
+	readRange := "status!A2:C4"
 	resp, err := srv.Spreadsheets.Values.Get(spreadsheetId, readRange).Do()
 	if err != nil {
 		msg := fmt.Sprintf("Unable to retrieve data from sheet: %v", err)
@@ -45,13 +52,24 @@ func getData() (string, error) {
 		//fmt.Println("No data found.")
 		return "No data found", nil
 	}
-	var output string
-	for _, row := range resp.Values {
-		// Print columns A and E, which correspond to indices 0 and 4.
-		//fmt.Printf("%s, %s\n", row[0], row[4])
-		fmt.Printf("%s, %+v\n", row[0], row)
-		output += fmt.Sprintf("%s, %+v\n", row[0], row)
+
+	var rowFormatter = func(values []any) (r table.Row) {
+		for _, v := range values {
+			r = append(r, v)
+		}
+		return
 	}
+
+	output := "// GC Sequencing Status\n\n"
+	t := table.NewWriter()
+	//if len(resp.Values) > 1 {
+	//t.AppendHeader(rowFormatter(resp.Values[0]))
+	t.AppendHeader(table.Row{"Intrument type", "Running", "Pending"})
+	for i := 0; i < len(resp.Values); i++ {
+		t.AppendRow(rowFormatter(resp.Values[i]))
+	}
+	//}
+	output += t.Render()
 
 	return output, nil
 }
@@ -65,7 +83,6 @@ func bailout(w http.ResponseWriter, msg string, status int) {
 func fooHandler(w http.ResponseWriter, _ *http.Request) {
 
 	var err error
-	var loc *time.Location
 	// Read from the cache
 	data, found := zaCache.Get("data")
 	if !found {
@@ -73,17 +90,19 @@ func fooHandler(w http.ResponseWriter, _ *http.Request) {
 			bailout(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		zaCache.Set("data", data, 1*time.Minute)
-		if loc, err = time.LoadLocation("America/New_York"); err != nil {
-			msg := fmt.Sprintf("error loading location: %s\n", err)
-			bailout(w, msg, http.StatusInternalServerError)
-			return
-		}
-		lastUpdated = time.Now().In(loc)
+		zaCache.Set("data", data, 5*time.Minute)
+		// var loc *time.Location
+		// if loc, err = time.LoadLocation("America/New_York"); err != nil {
+		// 	msg := fmt.Sprintf("error loading location: %s\n", err)
+		// 	bailout(w, msg, http.StatusInternalServerError)
+		// 	return
+		// }
+		//lastUpdated = time.Now().In(loc)
 	}
+	w.Header().Set("Content-type", "text/plain")
 	w.Write([]byte(data.(string)))
 	w.Write([]byte("\n"))
-	w.Write([]byte(fmt.Sprintf("\nLast updated: %s\n", lastUpdated.Format(time.RFC3339))))
+	//w.Write([]byte(fmt.Sprintf("\nLast updated: %s\n", lastUpdated.Format(time.RFC3339))))
 }
 
 func main() {
@@ -114,7 +133,7 @@ func main() {
 		log.Fatalf("Unable to retrieve Sheets client: %v", err)
 	}
 
-	http.HandleFunc("/foo", fooHandler)
+	http.HandleFunc("/status", fooHandler)
 
 	// http.HandleFunc("/bar", func(w http.ResponseWriter, r *http.Request) {
 	// 	fmt.Fprintf(w, "Hello, %q", html.EscapeString(r.URL.Path))
