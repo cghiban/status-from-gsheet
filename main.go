@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/akyoto/cache"
@@ -40,7 +41,16 @@ func getData() (string, error) {
 
 	// https://docs.google.com/spreadsheets/d/1hht9Vne2h3icOGX0hGscNklclJEZY7gYY-18n3KnGJo/edit#gid=0
 	spreadsheetId := "1hht9Vne2h3icOGX0hGscNklclJEZY7gYY-18n3KnGJo"
-	readRange := "status!A2:C4"
+	readRange := "status!A2:D6"
+
+	// ssresp, err := srv.Spreadsheets.Get(spreadsheetId).IncludeGridData(true).Do()
+	// if err != nil {
+	// 	msg := fmt.Sprintf("Unable to retrieve spreadsheet: %v", err)
+	// 	//log.Println(msg)
+	// 	return "", errors.New(msg)
+	// }
+	// fmt.Printf("properties: %+v\n", ssresp.Properties)
+
 	resp, err := srv.Spreadsheets.Values.Get(spreadsheetId, readRange).Do()
 	if err != nil {
 		msg := fmt.Sprintf("Unable to retrieve data from sheet: %v", err)
@@ -62,15 +72,28 @@ func getData() (string, error) {
 
 	output := "// GC Sequencing Status\n\n"
 	t := table.NewWriter()
-	//if len(resp.Values) > 1 {
-	//t.AppendHeader(rowFormatter(resp.Values[0]))
-	t.AppendHeader(table.Row{"Intrument type", "Running", "Pending"})
+	t.AppendHeader(table.Row{"Intrument type", "Running", "Pending/QC-ed", "Received"})
+	lastUpdated := ""
 	for i := 0; i < len(resp.Values); i++ {
+		if len(resp.Values[i]) == 0 {
+			continue
+		}
+		label := strings.TrimSpace(resp.Values[i][0].(string))
+		if label == "" {
+			continue
+		} else if label == "Last updated on" {
+			lastUpdated = resp.Values[i][1].(string)
+			continue
+		}
 		t.AppendRow(rowFormatter(resp.Values[i]))
 	}
-	//}
+
+	//t.AppendFooter(table.Row{"Last updated on", lastUpdated})
 	output += t.Render()
 
+	if lastUpdated != "" {
+		output += fmt.Sprintf("\n// Last updated: %s", lastUpdated)
+	}
 	return output, nil
 }
 
@@ -80,12 +103,18 @@ func bailout(w http.ResponseWriter, msg string, status int) {
 	w.Write([]byte(msg))
 }
 
-func fooHandler(w http.ResponseWriter, _ *http.Request) {
+func statusHandler(w http.ResponseWriter, r *http.Request) {
+
+	query := r.URL.Query()
+	no_cache := false
+	if _, exists := query["refresh"]; exists {
+		no_cache = true
+	}
 
 	var err error
 	// Read from the cache
 	data, found := zaCache.Get("data")
-	if !found {
+	if !found || no_cache {
 		if data, err = getData(); err != nil {
 			bailout(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -133,11 +162,7 @@ func main() {
 		log.Fatalf("Unable to retrieve Sheets client: %v", err)
 	}
 
-	http.HandleFunc("/status", fooHandler)
-
-	// http.HandleFunc("/bar", func(w http.ResponseWriter, r *http.Request) {
-	// 	fmt.Fprintf(w, "Hello, %q", html.EscapeString(r.URL.Path))
-	// })
+	http.HandleFunc("/status", statusHandler)
 
 	log.Printf("running app on port :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
